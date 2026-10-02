@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.egg-info/
+dist/
+.deep-eye/
+.env
+.pytest_cache/
