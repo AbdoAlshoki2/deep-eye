@@ -36,14 +36,35 @@ def _name(serialized: dict | None, kwargs: dict, default: str) -> str:
     return serialized.get("name") or (serialized.get("id") or [default])[-1]
 
 
-def _llm_output(response: Any) -> tuple[Any, dict | None]:
-    """Split an LLMResult into (output, token usage); providers report usage, no tokenizer needed."""
-    try:
-        message = response.generations[0][0].message
-    except (AttributeError, IndexError):
-        return response, None
+def _generation_output(generation: Any) -> tuple[Any, dict | None]:
+    message = getattr(generation, "message", None)
+    if message is None:  # plain (non-chat) LLMs only return text
+        return getattr(generation, "text", generation), None
     output = {"content": message.content, "tool_calls": getattr(message, "tool_calls", None)}
     return output, getattr(message, "usage_metadata", None)
+
+
+def _llm_output(response: Any) -> tuple[Any, dict | None]:
+    """Split an LLMResult into (output, token usage); providers report usage, no tokenizer needed.
+
+    A single generation is stored as-is; several (n > 1, or a batch of prompts) become a list
+    and their token counts are added up.
+    """
+    try:
+        generations = [g for batch in response.generations for g in batch]
+    except (AttributeError, TypeError):
+        return response, None
+    if not generations:
+        return response, None
+    results = [_generation_output(g) for g in generations]
+    if len(results) == 1:
+        return results[0]
+    usage: dict[str, int] = {}
+    for _, u in results:
+        for key in ("input_tokens", "output_tokens", "total_tokens"):
+            if isinstance((u or {}).get(key), int):
+                usage[key] = usage.get(key, 0) + u[key]
+    return [output for output, _ in results], usage or None
 
 
 class DeepEyeHandler(BaseCallbackHandler):

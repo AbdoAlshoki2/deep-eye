@@ -103,3 +103,36 @@ def test_clear_removes_only_trace_files_and_empty_folder(tmp_path):
     assert not d.exists()
     main(["clear", str(d), "-y"])  # missing folder is not an error
     assert not d.exists()
+
+
+def test_filter_hides_non_matching_runs(sample_run):
+    async def scenario():
+        app = DeepEyeApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("slash", *"zzz")
+            await pilot.pause()
+            assert app.screen.query_one(DataTable).row_count == 0
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen.query_one(DataTable).row_count == 1
+
+    asyncio.run(scenario())
+
+
+def test_open_run_picks_up_new_spans(sample_run):
+    from deep_eye.storage import list_runs
+    from deep_eye.tracer import begin_span
+
+    async def scenario():
+        app = DeepEyeApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            begin_span("late", parent=list_runs()[0].root)  # a live agent appends to the open run
+            await pilot.pause(1.5)
+            tree = app.screen.query_one(Tree)
+            assert len(tree.root.children[0].children) == 2
+
+    asyncio.run(scenario())

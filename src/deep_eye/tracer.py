@@ -1,7 +1,8 @@
 """The tracing API: @trace, span(), and the lower-level begin/finish helpers.
 
-The current span lives in a ContextVar, so nesting works across plain calls,
-threads started with copied contexts, and asyncio tasks.
+The current span lives in a ContextVar, so nesting works across plain calls
+and asyncio tasks. Threads don't inherit it on their own: wrap the function you
+hand to a thread or executor with `propagate()`.
 """
 
 import functools
@@ -11,7 +12,7 @@ import time
 import uuid
 from collections.abc import Callable
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from datetime import datetime
 from typing import Any
 
@@ -104,21 +105,122 @@ def _capture_args(sig: inspect.Signature, args: tuple, kwargs: dict) -> dict:
     try:
         bound = sig.bind(*args, **kwargs)
         bound.apply_defaults()
-        return dict(bound.arguments)
+        arguments = dict(bound.arguments)
     except TypeError:
         return {"args": args, "kwargs": kwargs}
+    first = next(iter(sig.parameters), None)
+    if first in ("self", "cls"):  # the object itself is noise, and its repr can be huge
+        arguments.pop(first, None)
+    return arguments
+
+
+def propagate(fn: Callable) -> Callable:
+    """Make `fn` nest under the current span when it runs in another thread.
+
+        with ThreadPoolExecutor() as ex:
+            ex.map(propagate(work), items)
+        threading.Thread(target=propagate(work)).start()
+    """
+    context = copy_context()
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        # A Context can only be entered by one thread at a time, so each call gets its own copy.
+        return context.copy().run(fn, *args, **kwargs)
+
+    return wrapper
+
+
+def _run_in_span(s: Span, step: Callable, arg: Any) -> Any:
+    """Advance a generator with `s` as the current span, without holding it across yields."""
+    token = _current_span.set(s)
+    try:
+        return step(arg)
+    finally:
+        _current_span.reset(token)
+
+
+async def _arun_in_span(s: Span, step: Callable, arg: Any) -> Any:
+    token = _current_span.set(s)
+    try:
+        return await step(arg)
+    finally:
+        _current_span.reset(token)
 
 
 def trace(fn: Callable | None = None, *, name: str | None = None, kind: str = "function"):
     """Decorator that records a function's inputs, output, errors and timing.
 
     Usable bare (`@trace`) or configured (`@trace(name="x", kind="tool")`).
-    Works on sync and async functions.
+    Works on sync and async functions and generators; a generator's span lasts
+    until it is exhausted (or closed) and its output is the list of yielded items.
     """
 
     def decorator(func: Callable) -> Callable:
         span_name = name or func.__name__
         sig = inspect.signature(func)
+
+        if inspect.isasyncgenfunction(func):
+            @functools.wraps(func)
+            async def async_gen_wrapper(*args, **kwargs):
+                s = begin_span(span_name, kind, _capture_args(sig, args, kwargs))
+                items: list = []
+                agen = func(*args, **kwargs)
+                step, arg = agen.asend, None
+                try:
+                    while True:
+                        try:
+                            item = await _arun_in_span(s, step, arg)
+                        except StopAsyncIteration:
+                            break
+                        items.append(item)
+                        try:
+                            step, arg = agen.asend, (yield item)
+                        except GeneratorExit:  # the caller stopped early: not an error
+                            await agen.aclose()
+                            raise
+                        except BaseException as exc:  # thrown in by the caller: pass it on
+                            step, arg = agen.athrow, exc
+                except GeneratorExit:
+                    finish_span(s, items)
+                    raise
+                except BaseException as exc:
+                    finish_span(s, items, error=exc)
+                    raise
+                finish_span(s, items)
+            return async_gen_wrapper
+
+        if inspect.isgeneratorfunction(func):
+            @functools.wraps(func)
+            def gen_wrapper(*args, **kwargs):
+                s = begin_span(span_name, kind, _capture_args(sig, args, kwargs))
+                items: list = []
+                gen = func(*args, **kwargs)
+                step, arg = gen.send, None
+                try:
+                    while True:
+                        try:
+                            item = _run_in_span(s, step, arg)
+                        except StopIteration as stop:
+                            result = stop.value
+                            break
+                        items.append(item)
+                        try:
+                            step, arg = gen.send, (yield item)
+                        except GeneratorExit:  # the caller stopped early: not an error
+                            gen.close()
+                            raise
+                        except BaseException as exc:  # thrown in by the caller: pass it on
+                            step, arg = gen.throw, exc
+                except GeneratorExit:
+                    finish_span(s, items)
+                    raise
+                except BaseException as exc:
+                    finish_span(s, items, error=exc)
+                    raise
+                finish_span(s, items)
+                return result
+            return gen_wrapper
 
         if inspect.iscoroutinefunction(func):
             @functools.wraps(func)

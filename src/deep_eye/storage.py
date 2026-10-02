@@ -14,6 +14,7 @@ from .models import Run, Span
 from .serialize import to_jsonable
 
 _lock = threading.Lock()
+_cache: dict[Path, tuple[tuple[int, int], Run]] = {}  # path -> ((mtime_ns, size), parsed run)
 
 
 def _append(run_id: str, event: dict) -> None:
@@ -42,36 +43,67 @@ def write_end(span: Span) -> None:
         "span_id": span.span_id,
         "end": span.end,
         "output": to_jsonable(span.output),
-        "error": span.error,
+        "error": to_jsonable(span.error),
         "usage": to_jsonable(span.usage),
     })
 
 
-def load_run(path: Path) -> Run:
-    """Rebuild a Run by merging the start/end events of every span."""
+def _parse_line(line: str) -> dict | None:
+    """One event, or None for anything that isn't one (half-written line, foreign data, ...)."""
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(event, dict) or not isinstance(event.get("span_id"), str):
+        return None
+    return event
+
+
+def _read_run(path: Path) -> Run:
     spans: dict[str, Span] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        event = _parse_line(line)
+        if event is None:
+            continue
         try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue  # tolerate a half-written last line of a live run
-        if event["event"] == "start":
-            spans[event["span_id"]] = Span(
-                span_id=event["span_id"],
-                run_id=path.stem,
-                parent_id=event["parent_id"],
-                name=event["name"],
-                kind=event["kind"],
-                start=event["start"],
-                input=event["input"],
-            )
-        elif event["span_id"] in spans:
-            span = spans[event["span_id"]]
-            span.end = event["end"]
-            span.output = event["output"]
-            span.error = event["error"]
-            span.usage = event.get("usage")
+            if event.get("event") == "start":
+                spans[event["span_id"]] = Span(
+                    span_id=event["span_id"],
+                    run_id=path.stem,
+                    parent_id=event.get("parent_id"),
+                    name=str(event.get("name", "?")),
+                    kind=str(event.get("kind", "function")),
+                    start=float(event["start"]),
+                    input=event.get("input"),
+                )
+            elif event.get("event") == "end" and event["span_id"] in spans:
+                span = spans[event["span_id"]]
+                span.end = float(event["end"])
+                span.output = event.get("output")
+                span.error = event.get("error")
+                span.usage = event.get("usage") if isinstance(event.get("usage"), dict) else None
+        except (KeyError, TypeError, ValueError):
+            continue  # a line with the right shape but bad values: skip just that line
     return Run(run_id=path.stem, path=path, spans=list(spans.values()))
+
+
+def load_run(path: Path) -> Run:
+    """Rebuild a Run by merging the start/end events of every span.
+
+    Results are cached until the file changes, so refreshing the viewer only
+    re-parses runs that are still being written.
+    """
+    try:
+        stat = path.stat()
+    except OSError:
+        return Run(run_id=path.stem, path=path, spans=[])
+    key = (stat.st_mtime_ns, stat.st_size)
+    cached = _cache.get(path)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    run = _read_run(path)
+    _cache[path] = (key, run)
+    return run
 
 
 def list_runs(trace_dir: Path | None = None) -> list[Run]:
@@ -80,4 +112,7 @@ def list_runs(trace_dir: Path | None = None) -> list[Run]:
     if not trace_dir.is_dir():
         return []
     files = sorted(trace_dir.glob("*.jsonl"), reverse=True)  # names start with a timestamp
+    present = set(files)
+    for stale in [p for p in _cache if p.parent == trace_dir and p not in present]:
+        del _cache[stale]  # deleted files
     return [load_run(f) for f in files]

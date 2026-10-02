@@ -6,7 +6,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, Static, Tree
+from textual.widgets import DataTable, Footer, Header, Input, Static, Tree
 
 from .models import Run, Span
 from .render import fmt_duration, fmt_time, fmt_tokens, span_detail, span_label, status_markup
@@ -18,18 +18,47 @@ from .themes import THEMES, Palette, get_theme, next_theme_name
 class RunsScreen(Screen):
     """Table of all stored runs, newest first. Refreshes itself while open."""
 
-    BINDINGS = [Binding("r", "refresh", "Refresh")]
+    BINDINGS = [
+        Binding("r", "refresh", "Refresh"),
+        Binding("slash", "filter", "Filter"),
+        Binding("escape", "clear_filter", "Clear filter", show=False),
+    ]
 
     def __init__(self, trace_dir: Path | None) -> None:
         super().__init__()
         self.trace_dir = trace_dir
+        self.filter = ""
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield Input(placeholder="filter by name, run id or status (Enter: apply, Esc: clear)", id="filter")
         yield DataTable(cursor_type="row", zebra_stripes=True)
         yield Footer()
 
+    def _matches(self, run: Run) -> bool:
+        needle = self.filter.lower()
+        return not needle or any(needle in field.lower() for field in (run.name, run.run_id, run.status))
+
+    def action_filter(self) -> None:
+        box = self.query_one("#filter", Input)
+        box.display = True
+        box.focus()
+
+    def action_clear_filter(self) -> None:
+        box = self.query_one("#filter", Input)
+        box.value = ""
+        box.display = False
+        self.query_one(DataTable).focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self.filter = event.value
+        self.action_refresh()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.query_one(DataTable).focus()
+
     def on_mount(self) -> None:
+        self.query_one("#filter", Input).display = False
         table = self.query_one(DataTable)
         table.add_columns("Started", "Run", "Duration", "Tokens", "Spans", "Status")
         self.action_refresh()
@@ -41,7 +70,7 @@ class RunsScreen(Screen):
         table = self.query_one(DataTable)
         row = table.cursor_row
         table.clear()
-        for run in list_runs(self.trace_dir):
+        for run in filter(self._matches, list_runs(self.trace_dir)):
             table.add_row(
                 fmt_time(run.start),
                 run.name,
@@ -71,6 +100,7 @@ class RunScreen(Screen):
     def __init__(self, path: Path) -> None:
         super().__init__()
         self.path = path
+        self._loaded: Run | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -83,13 +113,18 @@ class RunScreen(Screen):
     def on_mount(self) -> None:
         self.action_reload()
         self.query_one(Tree).focus()
+        self.set_interval(1, self._reload_if_changed)  # follow a run that is still being written
+
+    def _reload_if_changed(self) -> None:
+        if load_run(self.path) is not self._loaded:  # load_run returns a new Run only when the file changed
+            self.action_reload()
 
     def action_back(self) -> None:
         self.app.pop_screen()
 
     def action_reload(self) -> None:
         """(Re)build the tree from the file, keeping the cursor where it was."""
-        run = load_run(self.path)
+        run = self._loaded = load_run(self.path)
         tree = self.query_one(Tree)
         line = tree.cursor_line
         tree.clear()

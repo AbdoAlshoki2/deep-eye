@@ -84,3 +84,18 @@ def test_retriever_becomes_a_span_with_documents():
     assert span.kind == "retriever"
     assert span.input == "cats"
     assert span.output == [{"content": "about cats", "metadata": {"id": 1}}]
+
+
+def test_multiple_generations_are_all_recorded_with_summed_usage():
+    from langchain_core.messages import AIMessage
+    from langchain_core.outputs import ChatGeneration, LLMResult
+
+    from deep_eye.integrations.langchain import _llm_output
+
+    def gen(text, n):
+        return ChatGeneration(message=AIMessage(
+            content=text, usage_metadata={"input_tokens": n, "output_tokens": n, "total_tokens": 2 * n}))
+
+    output, usage = _llm_output(LLMResult(generations=[[gen("a", 1), gen("b", 2)]]))
+    assert [o["content"] for o in output] == ["a", "b"]
+    assert usage == {"input_tokens": 3, "output_tokens": 3, "total_tokens": 6}
