@@ -12,7 +12,7 @@ from rich.tree import Tree
 
 from .config import configure, get_trace_dir
 from .models import Run
-from .render import fmt_duration, fmt_time, fmt_tokens, plain, span_detail, span_label, status_text
+from .render import fmt_duration, fmt_time, fmt_tokens, plain, span_detail, span_label, status_text, unsupported_text
 from .settings import load_settings
 from .storage import list_runs, trace_files
 from .themes import Palette, get_theme
@@ -48,6 +48,10 @@ def _cmd_show(console: Console, palette: Palette, ref: str, details: bool) -> No
             console.print(plain(f"  {r.run_id}  {r.name}"))
         return
     run = matches[0]
+    if not run.supported:
+        console.print(plain(f"{run.run_id}  ·  unsupported", "bold"))
+        console.print(unsupported_text(run))
+        return
 
     def add(node: Tree, parent_id: str | None) -> None:
         for span in run.children_of(parent_id):
@@ -73,6 +77,9 @@ def _cmd_export(refs: list[str], output: str | None, kinds: list[str] | None,
         runs = {r.run_id: r for ref in refs for r in _find_runs(ref)}.values()  # prefixes may overlap
     else:
         runs = list_runs()
+    for run in runs:
+        if not run.supported:
+            print(f"Skipped {run.run_id}: {run.unsupported_reason}", file=sys.stderr)
     records = span_records(sorted(runs, key=lambda r: r.start), kinds, statuses)  # oldest first
     if output is None:
         sys.stdout.flush()
@@ -82,6 +89,9 @@ def _cmd_export(refs: list[str], output: str | None, kinds: list[str] | None,
         except OSError:  # the reader stopped early (`| head`); Windows reports EINVAL, not EPIPE
             os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())  # silence the exit flush
         return
+    if not output.lower().endswith(".jsonl"):
+        print(f"Warning: {output} does not end with .jsonl, but the export is JSON Lines "
+              "(one JSON record per line)", file=sys.stderr)
     with open(output, "wb") as f:
         count = write_jsonl(records, f)
     print(f"Wrote {count} span record(s) to {output}", file=sys.stderr)

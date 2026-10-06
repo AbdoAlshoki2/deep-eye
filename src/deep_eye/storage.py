@@ -1,8 +1,9 @@
 """Reading and writing traces as JSON Lines files, one file per run.
 
-Each span produces two lines: a "start" event when it opens and an "end" event
-when it closes. Writing the start immediately means a crashed or still-running
-agent leaves a readable (partial) trace behind.
+A file starts with a run header line (format version, process), then each span
+produces two lines: a "start" event when it opens and an "end" event when it
+closes. Writing the start immediately means a crashed or still-running agent
+leaves a readable (partial) trace behind. schema.py describes the format.
 
 Files are plain JSON on purpose, so they are easy to read, grep and load into other
 tools. They are kept private to your user instead: the folder is created with mode 700
@@ -21,11 +22,10 @@ from pathlib import Path
 
 from .config import get_trace_dir, sync_writes
 from .models import HOST, Run, Span
+from .schema import SCHEMA_VERSION, normalize_kind
 from .serialize import to_jsonable
 
 log = logging.getLogger("deep_eye")
-
-SCHEMA_VERSION = 1  # the "v" field of every event; bumped when the format changes incompatibly
 
 _lock = threading.Lock()
 _cache: dict[Path, tuple[tuple[int, int], Run]] = {}  # path -> ((mtime_ns, size), parsed run)
@@ -147,7 +147,7 @@ def _start_writer() -> bool:
 
 
 def _append(span: Span, event: dict) -> None:
-    item = (span.file or run_file(span.run_id), {"v": SCHEMA_VERSION, **event})
+    item = (span.file or run_file(span.run_id), event)
     if sync_writes() or not _start_writer():
         _write_batch([item])
         return
@@ -187,6 +187,18 @@ def flush(timeout: float | None = 5.0) -> bool:
 
 # --- events ---------------------------------------------------------------------------
 
+def write_header(root: Span) -> None:
+    """The run's first line. pid and host let the viewer tell a crashed run from a live one."""
+    _append(root, {
+        "event": "run",
+        "schema_version": SCHEMA_VERSION,
+        "run_id": root.run_id,
+        "start": root.start,
+        "pid": os.getpid(),
+        "host": HOST,
+    })
+
+
 def write_start(span: Span) -> None:
     event = {
         "event": "start",
@@ -197,12 +209,14 @@ def write_start(span: Span) -> None:
         "start": span.start,
         "input": to_jsonable(span.input),
     }
-    if span.parent_id is None:  # lets the viewer tell a crashed run from a live one
-        event.update(pid=os.getpid(), host=HOST)
+    if span.attrs:
+        event["attrs"] = to_jsonable(span.attrs)
     _append(span, event)
 
 
-def write_end(span: Span) -> None:
+def write_end(span: Span, late: dict | None = None) -> None:
+    """`late`: name / kind / input / attrs learned only when the span ended. They replace
+    the start event's values (attrs are merged into them)."""
     event = {
         "event": "end",
         "span_id": span.span_id,
@@ -213,6 +227,8 @@ def write_end(span: Span) -> None:
     }
     if span.interrupted:
         event["interrupted"] = True
+    for key, value in (late or {}).items():
+        event[key] = to_jsonable(value)
     _append(span, event)
 
 
@@ -267,9 +283,25 @@ def _parse_line(line: str) -> dict | None:
         event = json.loads(line)
     except json.JSONDecodeError:
         return None
-    if not isinstance(event, dict) or not isinstance(event.get("span_id"), str):
+    if not isinstance(event, dict):
+        return None
+    if event.get("event") != "run" and not isinstance(event.get("span_id"), str):
         return None
     return event
+
+
+def _schema_version(events: list[dict]) -> object:
+    """The file's format version: from the run header (version 2+), else from the events'
+    "v" field (version 1 had no header, and the oldest files have neither)."""
+    for event in events:
+        if event.get("event") == "run":
+            return event.get("schema_version")
+    versions = {event.get("v", 1) for event in events}
+    return 1 if versions <= {1} else next(v for v in versions if v != 1)
+
+
+def _dict(value: object) -> dict | None:
+    return value if isinstance(value, dict) else None
 
 
 def _read_run(path: Path, mtime: float) -> Run:
@@ -281,22 +313,28 @@ def _read_run(path: Path, mtime: float) -> Run:
             json.loads(lines[-1])
         except json.JSONDecodeError:
             run.incomplete = True  # the writer stopped in the middle of a line
-    for line in lines:
-        event = _parse_line(line)
-        if event is None:
-            continue
+    events = [e for e in map(_parse_line, lines) if e is not None]
+    run.schema_version = _schema_version(events)
+    if not run.supported:
+        return run  # a newer format: guessing at it could show wrong data
+    for event in events:
         try:
-            if event.get("event") == "start":
-                if event.get("parent_id") is None and isinstance(event.get("pid"), int):
+            if event.get("event") == "run":
+                if isinstance(event.get("pid"), int):
                     run.pid, run.host = event["pid"], str(event.get("host"))
+            elif event.get("event") == "start":
+                if event.get("parent_id") is None and isinstance(event.get("pid"), int):  # version 1
+                    run.pid, run.host = event["pid"], str(event.get("host"))
+                kind, attrs = normalize_kind(str(event.get("kind", "function")), _dict(event.get("attrs")))
                 spans[event["span_id"]] = Span(
                     span_id=event["span_id"],
                     run_id=path.stem,
                     parent_id=event.get("parent_id"),
                     name=str(event.get("name", "?")),
-                    kind=str(event.get("kind", "function")),
+                    kind=kind,
                     start=float(event["start"]),
                     input=event.get("input"),
+                    attrs=attrs,
                     file=path,
                 )
             elif event.get("event") == "end" and event["span_id"] in spans:
@@ -304,8 +342,17 @@ def _read_run(path: Path, mtime: float) -> Run:
                 span.end = float(event["end"])
                 span.output = event.get("output")
                 span.error = event.get("error")
-                span.usage = event.get("usage") if isinstance(event.get("usage"), dict) else None
+                span.usage = _dict(event.get("usage"))
                 span.interrupted = event.get("interrupted") is True
+                # values the writer only learned when the span ended
+                if "name" in event:
+                    span.name = str(event["name"])
+                if "input" in event:
+                    span.input = event["input"]
+                if _dict(event.get("attrs")):
+                    span.attrs = {**(span.attrs or {}), **event["attrs"]}
+                if "kind" in event:
+                    span.kind, span.attrs = normalize_kind(str(event["kind"]), span.attrs)
         except (KeyError, TypeError, ValueError):
             continue  # a line with the right shape but bad values: skip just that line
     run.spans = list(spans.values())

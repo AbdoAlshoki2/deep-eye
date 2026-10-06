@@ -86,9 +86,9 @@ def test_unserializable_values_do_not_break_tracing():
 
 
 def test_unfinished_span_shows_as_running(trace_dir):
-    from deep_eye.tracer import begin_span
+    from deep_eye.tracer import start_span
 
-    begin_span("hanging")
+    start_span("hanging")
     (run,) = list_runs()
     assert run.status == "running" and run.root.end is None
 

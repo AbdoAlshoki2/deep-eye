@@ -12,7 +12,8 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Header, Input, Static, Tree
 
 from .models import Run, Span
-from .render import clean, fmt_duration, fmt_time, fmt_tokens, plain, span_detail, span_label, status_text
+from .render import (clean, fmt_duration, fmt_time, fmt_tokens, plain, span_detail, span_label, status_text,
+                     unsupported_text)
 from .settings import load_settings, save_setting
 from .storage import delete_run, list_runs, load_run
 from .themes import THEMES, Palette, get_theme, next_theme_name
@@ -227,6 +228,8 @@ class RunScreen(DeleteRunMixin, Screen):
         self._add_children(run, tree.root, None)
         tree.root.expand_all()
         self._set_sub_title(run)
+        if not run.supported:
+            self.query_one("#detail", Static).update(unsupported_text(run))
         if line > 0:
             tree.call_after_refresh(tree.move_cursor_to_line, line)  # tree is laid out lazily
 

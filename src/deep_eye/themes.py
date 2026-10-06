@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 from textual.theme import Theme
 
+from .schema import KINDS
+
 
 @dataclass(frozen=True)
 class Palette:
@@ -26,18 +28,17 @@ class Palette:
     syntax: str  # Pygments theme for JSON blocks
 
     def kind_style(self, kind: str) -> str:
-        """Style for a span kind; unknown kinds fall back to the `function` style."""
-        return getattr(self, kind, self.function) if kind in KINDS else self.function
+        """Style for a span kind; embeddings look like retrievers, the rest like functions."""
+        if kind == "embedding":
+            return self.retriever
+        return getattr(self, kind) if kind in KINDS and hasattr(self, kind) else self.function
 
     def status_style(self, status: str) -> str:
         return {
             "ok": self.ok, "running": self.running, "unfinished": self.running,
             "interrupted": self.accent, "error": self.error, "crashed": self.error,
-            "incomplete": self.error,
+            "incomplete": self.error, "unsupported": self.error,
         }.get(status, self.function)
-
-
-KINDS = ("agent", "chain", "llm", "tool", "retriever", "function")
 
 
 @dataclass(frozen=True)

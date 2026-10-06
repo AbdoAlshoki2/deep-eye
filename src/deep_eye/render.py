@@ -63,7 +63,7 @@ def _span_duration(span: Span, run: Run | None) -> str:
 def span_label(span: Span, palette: Palette, run: Run | None = None) -> Text:
     """One tree line: `kind  name  duration  tokens`, highlighted on error."""
     label = Text()
-    label.append(f"{clean(span.kind):<9}", style=palette.kind_style(span.kind))
+    label.append(f"{clean(span.display_kind):<9}", style=palette.kind_style(span.kind))
     label.append(clean(span.name), style=palette.error if span.status == "error" else "bold")
     label.append(f"  {_span_duration(span, run)}", style="dim")
     if span.tokens:
@@ -89,7 +89,7 @@ def span_detail(span: Span, palette: Palette, run: Run | None = None) -> Rendera
     status = run.span_status(span) if run else span.status
     header = Text()
     header.append(f"{clean(span.name)}\n", style="bold")
-    header.append(clean(span.kind), style=palette.kind_style(span.kind))
+    header.append(clean(span.display_kind), style=palette.kind_style(span.kind))
     header.append(f"  ·  {status}", style=palette.status_style(status))
     header.append(f"  ·  {_span_duration(span, run)}  ·  {fmt_time(span.start)}", style="dim")
     if span.tokens:
@@ -107,4 +107,11 @@ def span_detail(span: Span, palette: Palette, run: Run | None = None) -> Rendera
     ]
     if span.error:
         parts += [Rule("Error", style=palette.accent), Text(clean(str(span.error)), style=palette.accent)]
+    if span.attrs:
+        parts += [Rule("Attributes", style="dim"), _value(span.attrs, palette)]
     return Group(*parts)
+
+
+def unsupported_text(run: Run) -> Text:
+    """Shown instead of the spans of a run written in a newer trace format."""
+    return Text(clean(run.unsupported_reason), style="bold")

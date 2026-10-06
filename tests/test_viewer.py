@@ -122,7 +122,7 @@ def test_filter_hides_non_matching_runs(sample_run):
 
 def test_open_run_picks_up_new_spans(sample_run):
     from deep_eye.storage import list_runs
-    from deep_eye.tracer import begin_span
+    from deep_eye.tracer import start_span
 
     async def scenario():
         app = DeepEyeApp()
@@ -130,7 +130,7 @@ def test_open_run_picks_up_new_spans(sample_run):
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            begin_span("late", parent=list_runs()[0].root)  # a live agent appends to the open run
+            start_span("late", parent=list_runs()[0].root)  # a live agent appends to the open run
             await pilot.pause(1.5)
             tree = app.screen.query_one(Tree)
             assert len(tree.root.children[0].children) == 2

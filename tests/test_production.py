@@ -123,7 +123,7 @@ def test_files_are_written_off_the_calling_thread(monkeypatch):
     threads.clear()
     deep_eye.configure(sync_writes=True)
     trace(lambda: None)()
-    assert threads == [threading.current_thread().name] * 2  # start and end, written immediately
+    assert threads == [threading.current_thread().name] * 3  # header, start and end, written immediately
 
 
 def test_queued_events_are_written_at_exit(tmp_path):
@@ -160,12 +160,13 @@ def test_full_queue_drops_events_with_one_warning(monkeypatch, caplog):
 
 # --- format version and export ----------------------------------------------------------
 
-def test_every_event_has_a_format_version(trace_dir):
+def test_run_header_carries_the_format_version(trace_dir):
     with span("a"):
         with span("b"):
             pass
-    events = _events(trace_dir)
-    assert len(events) == 4 and {e["v"] for e in events} == {storage.SCHEMA_VERSION}
+    header, *events = _events(trace_dir)
+    assert header["event"] == "run" and header["schema_version"] == storage.SCHEMA_VERSION
+    assert [e["event"] for e in events] == ["start", "start", "end", "end"]
 
 
 def _sample_runs():
@@ -195,7 +196,10 @@ def test_export_writes_one_flat_record_per_span(tmp_path):
     main(["export", "-o", str(out)])
     records = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert len(records) == 6
-    first = records[0]
+    assert records[0]["depth"] == 0  # each run starts with its root
+    # the two runs can start in the same clock tick (~16ms on Windows), so don't rely on their order
+    first = next(r for r in records if r["depth"] == 0 and r["input"] == {"q": "q1"})
+    records = [r for r in records if r["run_id"] == first["run_id"]]
     assert first["v"] == storage.SCHEMA_VERSION and first["run_name"] == "agent"
     assert (first["depth"], first["kind"], first["input"]) == (0, "agent", {"q": "q1"})
     tool_rec = next(r for r in records if r["kind"] == "tool")

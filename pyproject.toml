@@ -12,7 +12,10 @@ license = "MIT"
 dependencies = ["textual>=0.80", "rich>=13"]
 
 [project.optional-dependencies]
+# one extra per framework adapter (deep_eye/integrations/<name>.py); see "Supported frameworks"
 langchain = ["langchain-core>=0.3"]
+openai-agents = ["openai-agents>=0.21"]
+otel = ["opentelemetry-sdk>=1.20"]
 examples = ["langchain>=1", "langgraph", "langchain-google-genai", "python-dotenv"]
 dev = ["pytest>=8"]
 

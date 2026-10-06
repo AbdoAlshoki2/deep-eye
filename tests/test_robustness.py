@@ -144,9 +144,9 @@ def test_tracing_failures_never_reach_the_program(trace_dir, monkeypatch, caplog
 def test_spans_left_open_at_exit_are_closed(tmp_path):
     result = _run_script("""
         import sys
-        from deep_eye.tracer import begin_span
-        root = begin_span("agent")
-        begin_span("step", parent=root)
+        from deep_eye.tracer import start_span
+        root = start_span("agent")
+        start_span("step", parent=root)
         sys.exit(0)
     """, cwd=tmp_path)
     assert result.returncode == 0, result.stderr
@@ -177,8 +177,8 @@ def test_killed_process_shows_as_crashed(tmp_path):
     # sync_writes: with the background writer, a hard kill may lose the last queued events
     result = _run_script("""
         import os
-        from deep_eye.tracer import begin_span
-        begin_span("agent")
+        from deep_eye.tracer import start_span
+        start_span("agent")
         os._exit(1)  # like kill -9: no cleanup at all
     """, cwd=tmp_path, env={"DEEP_EYE_SYNC_WRITES": "1"})
     assert result.returncode == 1

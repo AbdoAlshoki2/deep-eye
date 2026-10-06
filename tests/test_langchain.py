@@ -99,3 +99,30 @@ def test_multiple_generations_are_all_recorded_with_summed_usage():
     output, usage = _llm_output(LLMResult(generations=[[gen("a", 1), gen("b", 2)]]))
     assert [o["content"] for o in output] == ["a", "b"]
     assert usage == {"input_tokens": 3, "output_tokens": 3, "total_tokens": 6}
+
+
+def test_contract_output_follows_the_schema():
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+    from langchain_core.prompts import ChatPromptTemplate
+
+    from deep_eye.schema import KINDS, validate_file
+
+    chain = ChatPromptTemplate.from_messages([("user", "{q}")]) | FakeListChatModel(responses=["hi"])
+    chain.invoke({"q": "hello"}, config={"callbacks": [DeepEyeHandler()]})
+    my_tool.invoke({"x": 1}, config={"callbacks": [DeepEyeHandler()]})
+    runs = list_runs()
+    assert len(runs) == 2
+    for run in runs:
+        assert validate_file(run.path) == []
+        assert all(s.kind in KINDS for s in run.spans)
+    assert "llm" in {s.kind for run in runs for s in run.spans}
+
+
+def test_handler_never_raises_on_odd_input():
+    from uuid import uuid4
+
+    handler = DeepEyeHandler()
+    handler.on_chain_start(None, None, run_id=uuid4())
+    handler.on_llm_end(object(), run_id=uuid4())
+    handler.on_retriever_end([object()], run_id=uuid4())
+    handler.on_tool_end(None, run_id="not-a-uuid")

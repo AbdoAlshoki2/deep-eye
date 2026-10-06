@@ -14,7 +14,7 @@ from collections.abc import Iterable, Iterator
 from typing import IO
 
 from .models import Run, Span
-from .storage import SCHEMA_VERSION
+from .schema import SCHEMA_VERSION
 
 
 def _depths(run: Run) -> dict[str, int]:
@@ -48,6 +48,7 @@ def span_record(run: Run, span: Span, depth: int | None = None) -> dict:
         "output": span.output,
         "error": span.error,
         "usage": span.usage,
+        "attrs": span.attrs,
     }
 
 

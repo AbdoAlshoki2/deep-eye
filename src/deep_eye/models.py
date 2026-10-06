@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .schema import ORIGINAL_KIND, SCHEMA_VERSION
+
 
 @dataclass
 class Span:
@@ -25,11 +27,21 @@ class Span:
     error: str | None = None
     usage: dict | None = None  # token counts, e.g. {"input_tokens": 10, "output_tokens": 5}
     interrupted: bool = False  # ended by KeyboardInterrupt, cancellation, exit, ...
+    attrs: dict | None = None  # anything else worth keeping: model name, framework ids, ...
 
     # Only used while tracing, never stored:
     file: Path | None = field(default=None, repr=False, compare=False)  # the run's trace file
+    capture_input: bool = field(default=True, repr=False, compare=False)
     capture_output: bool = field(default=True, repr=False, compare=False)
     recording: bool = field(default=True, repr=False, compare=False)  # False: tracing off / not sampled
+    started: bool = field(default=False, repr=False, compare=False)  # made by start_span(): a live handle
+
+    @property
+    def display_kind(self) -> str:
+        """The kind to show: for "other", the framework's own name for it when there is one."""
+        if self.kind == "other" and isinstance((self.attrs or {}).get(ORIGINAL_KIND), str):
+            return self.attrs[ORIGINAL_KIND]
+        return self.kind
 
     @property
     def tokens(self) -> int:
@@ -98,6 +110,16 @@ class Run:
     incomplete: bool = False  # the last line was cut off mid-write
     pid: int | None = None  # process that wrote the run, and its machine
     host: str | None = None
+    schema_version: Any = 1  # from the file; a version newer than SCHEMA_VERSION can't be read
+
+    @property
+    def supported(self) -> bool:
+        return isinstance(self.schema_version, int) and 1 <= self.schema_version <= SCHEMA_VERSION
+
+    @property
+    def unsupported_reason(self) -> str:
+        return (f"This run uses trace format version {self.schema_version!r}, but this deep-eye "
+                f"only reads versions 1 to {SCHEMA_VERSION}. Upgrade deep-eye to view it.")
 
     @property
     def root(self) -> Span | None:
@@ -134,7 +156,10 @@ class Run:
     @property
     def status(self) -> str:
         """ok / error / interrupted once the root span ended; otherwise running,
-        or crashed / incomplete when the writing process is gone."""
+        or crashed / incomplete when the writing process is gone.
+        "unsupported" when the file uses a newer trace format."""
+        if not self.supported:
+            return "unsupported"
         root = self.root
         if root is None or root.end is None:
             if self.alive:
