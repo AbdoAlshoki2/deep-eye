@@ -133,6 +133,7 @@ def test_secrets_are_redacted_by_key_and_by_pattern(trace_dir):
         return "ok"
 
     call("hunter2", {"Authorization": "abc"}, "my key is sk-ant-0123456789abcdefghij")
+    deep_eye.flush()
     text = next(trace_dir.glob("*.jsonl")).read_text()
     assert "hunter2" not in text and "abc" not in text and "sk-ant-0123456789" not in text
     root = list_runs()[0].root

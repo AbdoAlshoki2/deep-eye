@@ -3,15 +3,19 @@
 import dataclasses
 import enum
 import itertools
+import logging
 import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from .config import get_max_chars, get_max_items, get_redact_keys, redaction_enabled
+from .config import get_max_chars, get_max_items, get_redact_fn, get_redact_keys, redaction_enabled
+
+log = logging.getLogger("deep_eye")
 
 _MAX_DEPTH = 8
 REDACTED = "[redacted]"
+_hook_failed = False  # warn about a broken redact_fn once, not on every value
 
 # Strings that look like credentials, wherever they appear (even under an innocent key).
 _SECRET_PATTERNS = re.compile(
@@ -30,9 +34,26 @@ def _truncate(text: str, limit: int) -> str:
     return f"{text[:limit]}... [+{len(text) - limit} chars]"
 
 
+def _apply_hook(text: str) -> str:
+    """Run the user's redact_fn. A failure must never let the raw value through."""
+    global _hook_failed
+    hook = get_redact_fn()
+    if hook is None:
+        return text
+    try:
+        result = hook(text)
+        return result if isinstance(result, str) else str(result)
+    except Exception:
+        if not _hook_failed:
+            _hook_failed = True
+            log.warning("deep-eye: redact_fn raised; affected values are stored as %s", REDACTED,
+                        exc_info=True)
+        return REDACTED
+
+
 def _clean_str(text: str) -> str:
     if redaction_enabled():
-        text = _SECRET_PATTERNS.sub(REDACTED, text)
+        text = _apply_hook(_SECRET_PATTERNS.sub(REDACTED, text))
     return _truncate(text, get_max_chars())
 
 

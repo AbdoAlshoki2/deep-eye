@@ -136,3 +136,118 @@ def test_open_run_picks_up_new_spans(sample_run):
             assert len(tree.root.children[0].children) == 2
 
     asyncio.run(scenario())
+
+
+# --- traced text is shown literally (R5) ------------------------------------------------
+
+NASTY = ["[bold red]x[/]", "[@click=app.quit]x[/]", "\x1b[2J\x1b]0;title\x07"]
+
+
+def _nasty_run() -> str:
+    """Trace a run full of markup and escape codes; returns its run id."""
+    from deep_eye.storage import list_runs
+
+    @trace(name="[@click=app.quit]agent[/]")
+    def agent(a, b, c):
+        raise ValueError("\x1b[31mred[/]")
+
+    try:
+        agent(*NASTY)
+    except ValueError:
+        pass
+    return next(r.run_id for r in list_runs() if r.name.startswith("[@click"))
+
+
+def test_cli_shows_markup_and_escapes_literally(capsys):
+    run_id = _nasty_run()
+    main(["list"])
+    main(["show", run_id, "--details"])
+    out = capsys.readouterr().out
+    assert "[@click=app.quit]agent[/]" in out and r"\x1b[31mred[/]" in out
+    assert "\x1b[2J" not in out and "\x1b]0;" not in out and "\x07" not in out
+
+
+def test_tui_survives_hostile_text():
+    from rich.console import Console
+
+    from deep_eye.render import span_detail
+
+    _nasty_run()
+
+    async def scenario():
+        app = DeepEyeApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.screen.query_one(DataTable).row_count == 2
+            for row in (0, 1):  # open both runs; one of them is the hostile one
+                app.screen.query_one(DataTable).move_cursor(row=row)
+                await pilot.press("enter")
+                await pilot.pause()
+                await pilot.press("escape")
+            await pilot.press("enter")
+            await pilot.pause()
+            tree = app.screen.query_one(Tree)
+            assert app.is_running
+            return [str(n.label) for n in tree.root.children]
+
+    labels = asyncio.run(scenario())
+    assert labels
+
+    from deep_eye.storage import list_runs
+    run = next(r for r in list_runs() if r.name.startswith("[@click"))
+    console = Console(record=True, width=200)
+    console.print(span_detail(run.root, DeepEyeApp().palette, run))
+    text = console.export_text()
+    for value in ("[bold red]x[/]", "[@click=app.quit]x[/]", r"\u001b[2J\u001b]0;title\u0007"):
+        assert value in text
+
+
+# --- deleting a run with dd (R7) --------------------------------------------------------
+
+def _delete_scenario(*keys: str, open_run: bool = False):
+    async def scenario():
+        app = DeepEyeApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            if open_run:
+                await pilot.press("enter")
+                await pilot.pause()
+            await pilot.press(*keys)
+            await pilot.pause()
+            return app.is_running, type(app.screen).__name__
+
+    return asyncio.run(scenario())
+
+
+def test_single_d_does_nothing(sample_run):
+    assert _delete_scenario("d") == (True, "RunsScreen")
+    assert len(list(sample_run.glob("*.jsonl"))) == 1
+
+
+def test_dd_then_n_keeps_the_run(sample_run):
+    assert _delete_scenario("d", "d", "x", "q", "n") == (True, "RunsScreen")  # x, q: ignored
+    assert len(list(sample_run.glob("*.jsonl"))) == 1
+
+
+def test_dd_then_y_deletes_the_run(sample_run):
+    (sample_run / "notes.txt").write_text("keep")
+    assert _delete_scenario("d", "d", "y") == (True, "RunsScreen")
+    assert not list(sample_run.glob("*.jsonl")) and (sample_run / "notes.txt").exists()
+
+
+def test_dd_inside_a_run_deletes_it_and_returns_to_the_list(sample_run):
+    assert _delete_scenario("d", "d", "y", open_run=True) == (True, "RunsScreen")
+    assert not list(sample_run.glob("*.jsonl"))
+
+
+def test_delete_refuses_files_outside_the_trace_folder(sample_run, tmp_path):
+    from deep_eye.storage import delete_run
+
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.jsonl"
+    outside.write_text("{}\n")
+    try:
+        with pytest.raises(ValueError):
+            delete_run(outside, sample_run)
+        assert outside.exists()
+    finally:
+        outside.unlink()

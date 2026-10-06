@@ -30,7 +30,11 @@ class Palette:
         return getattr(self, kind, self.function) if kind in KINDS else self.function
 
     def status_style(self, status: str) -> str:
-        return {"ok": self.ok, "running": self.running, "error": self.error}[status]
+        return {
+            "ok": self.ok, "running": self.running, "unfinished": self.running,
+            "interrupted": self.accent, "error": self.error, "crashed": self.error,
+            "incomplete": self.error,
+        }.get(status, self.function)
 
 
 KINDS = ("agent", "chain", "llm", "tool", "retriever", "function")
