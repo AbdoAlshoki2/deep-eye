@@ -18,6 +18,16 @@ openai-agents = ["openai-agents>=0.21"]
 otel = ["opentelemetry-sdk>=1.20"]
 examples = ["langchain>=1", "langgraph", "langchain-google-genai", "python-dotenv"]
 dev = ["pytest>=8"]
+all = [
+    "langchain-core>=0.3",
+    "openai-agents>=0.21",
+    "opentelemetry-sdk>=1.20",
+    "langchain>=1",
+    "langgraph",
+    "langchain-google-genai",
+    "python-dotenv",
+    "pytest>=8"
+]
 
 [project.scripts]
 deep-eye = "deep_eye.cli:main"
