@@ -63,7 +63,8 @@ def _span_duration(span: Span, run: Run | None) -> str:
 def span_label(span: Span, palette: Palette, run: Run | None = None) -> Text:
     """One tree line: `kind  name  duration  tokens`, highlighted on error."""
     label = Text()
-    label.append(f"{clean(span.display_kind):<9}", style=palette.kind_style(span.kind))
+    kind = clean(span.display_kind)
+    label.append(kind.ljust(9) + (" " if len(kind) >= 9 else ""), style=palette.kind_style(span.kind))
     label.append(clean(span.name), style=palette.error if span.status == "error" else "bold")
     label.append(f"  {_span_duration(span, run)}", style="dim")
     if span.tokens:
