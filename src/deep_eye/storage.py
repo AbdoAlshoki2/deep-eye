@@ -307,8 +307,8 @@ def _dict(value: object) -> dict | None:
 def _read_run(path: Path, mtime: float) -> Run:
     run = Run(run_id=path.stem, path=path, spans=[], mtime=mtime)
     spans: dict[str, Span] = {}
-    lines = path.read_text(encoding="utf-8", errors="replace").rstrip().splitlines()
-    if lines:
+    lines = path.read_text(encoding="utf-8", errors="replace").rstrip().split("\n")  # not splitlines(): it also splits on U+2028/U+2029/U+0085
+    if lines and lines != [""]:
         try:
             json.loads(lines[-1])
         except json.JSONDecodeError:

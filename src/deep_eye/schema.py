@@ -149,4 +149,4 @@ def validate_lines(lines: list[str], require_ended: bool = True) -> list[str]:
 
 def validate_file(path: str | Path, require_ended: bool = True) -> list[str]:
     """Problems with one trace file (empty list: it follows the schema)."""
-    return validate_lines(Path(path).read_text(encoding="utf-8").splitlines(), require_ended)
+    return validate_lines(Path(path).read_text(encoding="utf-8").split("\n"), require_ended)

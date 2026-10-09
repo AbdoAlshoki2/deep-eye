@@ -142,20 +142,30 @@ class RunsScreen(DeleteRunMixin, Screen):
     def action_refresh(self) -> None:
         palette: Palette = self.app.palette
         table = self.query_one(DataTable)
-        row = table.cursor_row
-        table.clear()
-        for run in filter(self._matches, list_runs(self.trace_dir)):
-            table.add_row(
+        rows = [
+            (
                 fmt_time(run.start),
                 plain(run.name),
                 fmt_duration(run.duration),
                 fmt_tokens(run.tokens),
                 str(len(run.spans)),
                 status_text(run.status, palette),
-                key=str(run.path),
+                str(run.path),
             )
-        if table.row_count:
-            table.move_cursor(row=min(row, table.row_count - 1))  # after a delete: the next run
+            for run in filter(self._matches, list_runs(self.trace_dir))
+        ]
+        signature = [(*r[:5], str(r[5]), r[6]) for r in rows]
+        if signature == getattr(self, "_signature", None) and palette is getattr(self, "_palette", None):
+            return  # nothing changed: rebuilding would flash and jump the scroll position
+        self._signature, self._palette = signature, palette
+        row, scroll_y = table.cursor_row, table.scroll_y
+        with self.app.batch_update():
+            table.clear()
+            for *cells, key in rows:
+                table.add_row(*cells, key=key)
+            if table.row_count:
+                table.move_cursor(row=min(row, table.row_count - 1), scroll=False)  # after a delete: the next run
+            table.scroll_to(y=scroll_y, animate=False, immediate=True)
 
     restyle = action_refresh  # called by the app after a theme change
 
