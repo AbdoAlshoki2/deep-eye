@@ -66,7 +66,7 @@ spans in the same span tree.
 | Method | Use it when | Section |
 |---|---|---|
 | `@trace` decorator | You can change the function. The function is sync, async, a method or a generator. | [The @trace decorator](#the-trace-decorator) |
-| `with span(...)` | You want to record a part of a function. | [The span() block](#the-span-block) |
+| `with span(...)` | You want to record a part of a function, or you know the input only inside the block. | [The span() block](#the-span-block) |
 | `start_span()` and `end_span()` | The start and the end of the work are in different callbacks, threads or tasks. | [Spans from callbacks](#spans-from-callbacks) |
 | `propagate()` | You send traced work to a thread or a thread pool. | [Threads](#threads) |
 | `DeepEyeHandler` | You use LangChain or LangGraph. | [LangChain and LangGraph](#langchain-and-langgraph) |
@@ -116,6 +116,23 @@ plain Python, `asyncio`, threads, scripts, notebooks, tests and web servers
 
 ## Trace your code
 
+### Which pattern to use
+
+| Your situation | Use | Why |
+|---|---|---|
+| A function you can change | `@trace` | It records the arguments, the return value and errors for you. |
+| A part of a function (a step, a loop body, a library call) | `with span(...)` | You choose the block. You set the output yourself. |
+| The input is known only inside the block | `with span(...)` and `s.input = ...` | deep-eye saves the input when the block ends. |
+| Start and end are in different callbacks, threads or tasks | `start_span()` and `end_span()` | You hold the handle and close it later. |
+| Work that runs in a thread | `propagate(fn)` | Threads do not get the current span by themselves. |
+| A framework (LangChain, OpenAI Agents, OpenTelemetry) | An adapter | The adapter makes the spans for you. |
+
+You can mix all of these in one program. Nested calls build one span tree.
+
+`@trace` and `span()` are not two different tools. `@trace` is `span()` around a
+whole function. It fills the input (the arguments) and the output (the return
+value) for you. With `span()` you fill them.
+
 ### The @trace decorator
 
 ```python
@@ -130,9 +147,14 @@ def run_agent(question: str):
     return search(question)
 ```
 
-- `@trace` works on sync functions, `async` functions, methods and
-  generators.
+- Use it bare (`@trace`) or with arguments: `name=`, `kind=`, `attrs=`,
+  `capture_input=`, `capture_output=`. The default name is the function name.
+- It works on sync functions, `async` functions, methods and generators.
 - For a method, deep-eye does not record `self`.
+- The input is a dict of the arguments (with their names). The output is the
+  return value.
+- If the function raises an exception, the span records the error and the
+  exception continues.
 - The span of a generator stays open until the generator stops. Its output
   is the list of the items that the generator gave.
 
@@ -145,6 +167,67 @@ with span("plan", kind="llm", input=question) as s:
     s.output = "..."
     s.usage = {"input_tokens": 120, "output_tokens": 40}  # optional, the viewer shows it
 ```
+
+`span()` gives you a span object, `s`. What deep-eye saves:
+
+| You set | Saved? | Notes |
+|---|---|---|
+| `span("name", kind=, input=, attrs=)` | Yes | Written when the block starts. |
+| `s.output = ...` | Yes | Written when the block ends. Set it before the block ends. |
+| `s.usage = {...}` | Yes | Token counts. |
+| `s.input = ...` | Yes | Written when the block ends. See below. |
+| Any other attribute, for example `s.loaded = ...` | **No** | Python accepts it, but deep-eye ignores it. |
+| An exception in the block | Yes | The span records the error. The exception continues. |
+
+**If you know the input only inside the block**, assign it:
+
+```python
+with span("login") as s:
+    name = input("Enter your name: ")
+    s.input = name
+    s.output = authenticate(name)
+```
+
+- deep-eye saves the new input when the block ends, also when the block raises
+  an exception. If the process stops before the block ends (for example
+  `kill -9`), the viewer shows no input for that span.
+- Assign a new object. If you change the old input in place
+  (`s.input["q"] = ...`), deep-eye does not see it.
+- `capture_input=False` still applies. deep-eye writes `"[not captured]"`.
+
+**To keep more than one result**, you have these choices:
+
+```python
+# 1. Put them in the output:
+with span("login", input=name) as s:
+    loaded = load(name)
+    checked = validate(name)
+    s.output = {"loaded": loaded, "validated": checked}
+
+# 2. Give each step its own span, and see them as children:
+@trace
+def load(name): ...
+
+@trace
+def validate(name): ...
+
+with span("login", input=name) as s:
+    load(name)
+    validate(name)
+    s.output = "done"
+```
+
+Choice 2 is usually better. Each step has its own time, input, output and
+error in the viewer.
+
+Code that runs after the `with` block is not in the span. If it is a traced
+call and no other span is open, it starts a new run.
+
+### Spans with kinds
+
+`kind` tells the viewer what the span is (`llm`, `tool`, `agent` and others).
+Refer to [Span kinds](#span-kinds). A kind that is not in the list is stored
+as `other`.
 
 ### Keep data out of the trace
 
@@ -201,6 +284,25 @@ def on_tool_end(event):
 - `attrs={...}` keeps more data, for example a model name or the IDs of a
   framework. You can use `attrs` with `start_span`, `end_span`, `span` and
   `@trace`. The viewer shows `attrs` below the input and the output.
+
+Use these two functions when `span()` does not fit: when the work starts and
+ends in different places, or when you need a late `input=`, `name=` or `kind=`
+and also want to control the parent yourself. Example without callbacks:
+
+```python
+h = start_span("login")
+try:
+    name = input("Enter your name: ")
+    result = authenticate(name)          # a traced call here does NOT nest under h
+    end_span(h, output=result, input=name)
+except BaseException as exc:
+    end_span(h, error=exc)
+    raise
+```
+
+A handle does not become the current span. To nest a call under it, give
+`parent=h` to the `start_span()` of that call. For code in one place, `span()`
+is simpler, because it nests the calls and closes the span for you.
 
 `span()` and `@trace` use these two functions.
 

@@ -162,3 +162,55 @@ def test_tracing_off_gives_stand_in_handles(trace_dir):
     end_span(handle, "x")
     end_span(handle, "x")  # still ignored quietly
     assert not handle.recording and list(trace_dir.glob("*.jsonl")) == []
+
+
+# --- span(): input known only inside the block ------------------------------------------
+
+def test_span_input_assigned_inside_the_block_is_saved(tmp_path):
+    from deep_eye import configure, flush, span
+    from deep_eye.storage import list_runs
+    configure(trace_dir=tmp_path)
+    with span("login") as s:
+        s.input = "alice"
+        s.output = "ok"
+    flush()
+    (run,) = list_runs(tmp_path)
+    assert run.root.input == "alice" and run.root.output == "ok"
+
+
+def test_span_input_assigned_before_an_error_is_still_saved(tmp_path):
+    import pytest
+    from deep_eye import configure, flush, span
+    from deep_eye.storage import list_runs
+    configure(trace_dir=tmp_path)
+    with pytest.raises(ValueError):
+        with span("login", input="first") as s:
+            s.input = "second"
+            raise ValueError("boom")
+    flush()
+    (run,) = list_runs(tmp_path)
+    assert run.root.input == "second" and run.root.status == "error"
+
+
+def test_span_input_assigned_inside_respects_capture_input_false(tmp_path):
+    from deep_eye import configure, flush, span
+    from deep_eye.storage import list_runs
+    configure(trace_dir=tmp_path)
+    with span("login", capture_input=False) as s:
+        s.input = "swordfish"
+    flush()
+    text = "".join(p.read_text(encoding="utf-8") for p in tmp_path.glob("*.jsonl"))
+    assert "swordfish" not in text
+    (run,) = list_runs(tmp_path)
+    assert run.root.input == "[not captured]"
+
+
+def test_span_input_given_up_front_is_kept_when_not_reassigned(tmp_path):
+    from deep_eye import configure, flush, span
+    from deep_eye.storage import list_runs
+    configure(trace_dir=tmp_path)
+    with span("login", input="alice"):
+        pass
+    flush()
+    (run,) = list_runs(tmp_path)
+    assert run.root.input == "alice"

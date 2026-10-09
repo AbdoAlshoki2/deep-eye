@@ -110,6 +110,7 @@ In the viewer, press `Enter` to open a run, `Esc` to go back, `/` to filter,
 | Record only some runs | Set `DEEP_EYE_SAMPLE_RATE=0.1` (1 run in 10). |
 | Keep the data of a function out of the trace | `@trace(capture_input=False, capture_output=False)` |
 | Trace work in a thread | Use `propagate(fn)` before you send `fn` to the thread. |
+| Trace a part of a function | `with span("name", input=x) as s:` then `s.output = ...`. If you know the input only inside the block, set `s.input = ...`. |
 | Trace callbacks (start and end in different places) | Use `start_span()` and `end_span()`. |
 | Delete old traces | `deep-eye clear --older-than 7` |
 
@@ -122,6 +123,7 @@ sensitive data. Refer to [Security](docs/reference.md#security).
 
 The [reference](docs/reference.md) has the full technical information:
 
+- [Which pattern to use: `@trace`, `span()` or `start_span()`](docs/reference.md#which-pattern-to-use)
 - [Ways to connect deep-eye to your code](docs/reference.md#ways-to-connect-deep-eye-to-your-code)
 - [Frameworks and tested versions](docs/reference.md#frameworks-that-you-can-use-with-deep-eye)
 - [All settings, redaction and sampling](docs/reference.md#settings)

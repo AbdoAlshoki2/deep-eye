@@ -317,11 +317,16 @@ def span(
 ):
     """Trace a block of code. Inside it, set `s.output = ...` (and `s.usage = {...}` for LLM calls).
 
+    If the input is only known inside the block, assign it: `s.input = ...`. It is saved when the
+    block ends, so a crash before that loses it. Assign a new object: changing the old one in
+    place (`s.input["q"] = ...`) is not noticed.
+
     With capture_input/capture_output=False the input/output (and the error message) are stored
     as "[not captured]"; name, timing, nesting, status and the error type are still recorded.
     """
     s = start_span(name, kind, input, attrs=attrs, capture_input=capture_input,
                    capture_output=capture_output)
+    opened_with = s.input
     token = _current_span.set(s)
     error: BaseException | None = None
     try:
@@ -330,7 +335,10 @@ def span(
         error = exc
         raise
     finally:
-        end_span(s, error=error)
+        if s.input is opened_with:
+            end_span(s, error=error)
+        else:
+            end_span(s, error=error, input=s.input)
         _current_span.reset(token)
 
 
