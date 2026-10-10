@@ -1,5 +1,6 @@
 """Interactive terminal viewer (Textual): list of runs -> span tree + detail."""
 
+import os
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -11,8 +12,9 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Header, Input, Static, Tree
 
+from . import render
 from .models import Run, Span
-from .render import (clean, fmt_duration, fmt_time, fmt_tokens, plain, span_detail, span_label, status_text,
+from .render import (clean, parse_rtl_mode, fmt_duration, fmt_time, fmt_tokens, plain, span_detail, span_label, status_text,
                      unsupported_text)
 from .settings import load_settings, save_setting
 from .storage import delete_run, list_runs, load_run
@@ -261,6 +263,7 @@ class DeepEyeApp(App):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("t", "cycle_theme", "Theme"),
+        Binding("b", "toggle_rtl", "RTL"),
     ]
     CSS = """
     #tree { width: 45%; border-right: solid $primary; }
@@ -272,6 +275,18 @@ class DeepEyeApp(App):
         self.trace_dir = trace_dir
         self.theme_name = get_theme(load_settings().get("theme")).name
         self.palette: Palette = get_theme(self.theme_name).palette
+        render.rtl_mode = parse_rtl_mode(os.environ.get("DEEP_EYE_RTL") or load_settings().get("rtl"))
+
+    def action_toggle_rtl(self) -> None:
+        """Cycle right-to-left display: off -> words -> full (full needs deep-eye[rtl]); remembered."""
+        modes = [m for m in render.RTL_MODES if m != "full" or render.full_rtl_available()]
+        i = modes.index(render.rtl_mode) if render.rtl_mode in modes else -1
+        render.rtl_mode = modes[(i + 1) % len(modes)]
+        save_setting("rtl", render.rtl_mode)
+        restyle = getattr(self.screen, "restyle", None)
+        if restyle:
+            restyle()
+        self.notify(f"Right-to-left: {render.rtl_mode}", timeout=1.5)
 
     def on_mount(self) -> None:
         for theme in THEMES.values():

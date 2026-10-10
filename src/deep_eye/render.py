@@ -22,9 +22,89 @@ from .themes import Palette
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
+# Arabic, Hebrew, Syriac, Thaana, ... and their presentation forms
+_RTL = re.compile(r"[֐-ࣿיִ-﷿ﹰ-﻿]")
+
+# Right-to-left text (Arabic, Hebrew, ...) is often shown in the wrong word order, because
+# the viewer draws cells itself and the terminal does not reorder them. Two display-only
+# modes fix that (the traces on disk are never changed):
+#   "words": reverse the order of the words in each right-to-left run and leave the letters
+#            alone, for terminals that already join and order the letters of a word;
+#   "full":  also join the letters and reorder them, for terminals that do neither.
+#            Needs `pip install "deep-eye[rtl]"`.
+_LEAD = re.compile(r"""["'(\[{]*""")
+_TRAIL = re.compile(r"""[.,:;!?"')\]}]*$""")
+RTL_MODES = ("off", "words", "full")
+rtl_mode = "off"
+
+
+def full_rtl_available() -> bool:
+    try:
+        import arabic_reshaper  # noqa: F401
+        import bidi.algorithm  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def parse_rtl_mode(value: str | None) -> str:
+    value = {"1": "words", "on": "words"}.get(value or "", value)
+    return value if value in RTL_MODES else "off"
+
+
+def _reverse_rtl_words(line: str) -> str:
+    """Reverse the order of each run of consecutive words that contain right-to-left letters."""
+    tokens = re.split(r"( +)", line)  # words and the spaces between them, kept
+    out: list[str] = []
+    run: list[str] = []  # the words (spaces dropped) of the current right-to-left run
+
+    def flush() -> None:
+        if run:
+            # quotes and brackets glued to the run's edges (`"مرحبا` ... `الكود."`) stay at those edges
+            lead = _LEAD.match(run[0]).group()
+            trail = _TRAIL.search(run[-1][len(lead):]).group()
+            run[0] = run[0][len(lead):]
+            run[-1] = run[-1][:len(run[-1]) - len(trail)] if trail else run[-1]
+            out.append(lead + " ".join(reversed(run)) + trail)
+            run.clear()
+
+    pending_space = ""
+    for tok in tokens:
+        if not tok:
+            continue
+        if tok.isspace():
+            pending_space = tok
+        elif _RTL.search(tok):
+            if not run:
+                out.append(pending_space)
+            run.append(tok)
+            pending_space = ""
+        else:
+            flush()
+            out.append(pending_space + tok)
+            pending_space = ""
+    flush()
+    out.append(pending_space)
+    return "".join(out)
+
+
+def _shape_rtl(text: str) -> str:
+    if rtl_mode == "off" or not _RTL.search(text):
+        return text
+    if rtl_mode == "full":
+        try:
+            from arabic_reshaper import reshape
+            from bidi.algorithm import get_display
+        except ImportError:
+            return text
+        return "\n".join(get_display(reshape(line)) if _RTL.search(line) else line
+                         for line in text.split("\n"))
+    return "\n".join(_reverse_rtl_words(line) if _RTL.search(line) else line for line in text.split("\n"))
+
+
 def clean(text: str) -> str:
     """Show control characters as visible escapes (`\\x1b`) instead of sending them to the terminal."""
-    return _CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}", text)
+    return _shape_rtl(_CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}", text))
 
 
 def plain(text: str, style: str = "") -> Text:

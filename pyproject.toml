@@ -16,6 +16,7 @@ dependencies = ["textual>=0.80", "rich>=13"]
 langchain = ["langchain-core>=0.3"]
 openai-agents = ["openai-agents>=0.21"]
 otel = ["opentelemetry-sdk>=1.20"]
+rtl = ["arabic-reshaper>=3", "python-bidi>=0.5"]  # show Arabic/Hebrew correctly in the viewer
 examples = ["langchain>=1", "langgraph", "langchain-google-genai", "python-dotenv"]
 dev = ["pytest>=8"]
 all = [

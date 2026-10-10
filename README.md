@@ -99,7 +99,8 @@ deep-eye export -o spans.jsonl  # one JSON record per span
 ```
 
 In the viewer, press `Enter` to open a run, `Esc` to go back, `/` to filter,
-`t` to change the theme and `q` to quit.
+`t` to change the theme, `b` to show right-to-left text correctly (Arabic,
+Hebrew) and `q` to quit.
 
 ## Usual tasks
 
@@ -113,6 +114,7 @@ In the viewer, press `Enter` to open a run, `Esc` to go back, `/` to filter,
 | Trace a part of a function | `with span("name", input=x) as s:` then `s.output = ...`. If you know the input only inside the block, set `s.input = ...`. |
 | Trace callbacks (start and end in different places) | Use `start_span()` and `end_span()`. |
 | Delete old traces | `deep-eye clear --older-than 7` |
+| Read Arabic or Hebrew text in the viewer | Press `b`, or set `DEEP_EYE_RTL=words`. Refer to [Right-to-left text](docs/reference.md#right-to-left-text). |
 
 deep-eye hides usual secrets (API keys, passwords, authorization headers)
 before it writes to the disk. This is not complete protection. Traces are

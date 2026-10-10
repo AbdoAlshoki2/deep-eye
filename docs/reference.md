@@ -38,7 +38,8 @@ You must have Python 3.10 or a later version. deep-eye is not on PyPI.
    ```
 
 2. If you use a framework adapter, install it with its extra. The extras are
-   `langchain`, `openai-agents` and `otel`:
+   `langchain`, `openai-agents`, `otel` and `rtl` (right-to-left text in the
+   viewer, refer to [Right-to-left text](#right-to-left-text)):
 
    ```bash
    pip install "deep-eye[langchain] @ git+https://github.com/AbdoAlshoki2/deep-eye.git"
@@ -556,6 +557,7 @@ Viewer keys:
 | `/` | Filter the runs by name, ID or status. |
 | `r` | Read the files again. |
 | `t` | Change the theme. |
+| `b` | Change the right-to-left mode: `off`, `words` or `full`. Refer to [Right-to-left text](#right-to-left-text). |
 | `q` | Quit. |
 | `d` `d` | Delete a run (press `d` two times quickly). |
 
@@ -584,6 +586,39 @@ Run statuses:
 
 For a crashed run, the viewer shows the open spans as `unfinished`. It shows
 the time until the last recorded event, for example `≥2.31s`.
+
+### Right-to-left text
+
+deep-eye saves Arabic, Hebrew and other right-to-left text correctly. The
+files are UTF-8, and deep-eye does not change the text. But the viewer draws
+each cell itself, so many terminals show the words of a right-to-left line
+in the wrong order. For example, `hello how are you` in a right-to-left
+language can show as `you are how hello`.
+
+Press `b` in the viewer to change the mode. The viewer remembers your choice.
+The modes change only what you see. They never change the trace files.
+
+| Mode | What it does | When to use it |
+|---|---|---|
+| `off` | Shows the text as it is. | The default. Your terminal already shows the text correctly. |
+| `words` | Reverses the order of the words in each right-to-left run. It does not change the letters. | Your terminal joins the letters of a word, but the words are in the wrong order. For example, the terminal of VS Code on Windows. |
+| `full` | Joins the letters and puts everything in the right order. | Your terminal does neither, so the letters are separate. Install `pip install "deep-eye[rtl]"` first. If the letters are in the wrong order in this mode, use `words`. |
+
+To start in a mode, set the `DEEP_EYE_RTL` environment variable to `words` or
+`full`. It has priority over the saved choice. The viewer saves the choice in
+`settings.json`, in the same place as the theme.
+
+Limits of these modes:
+
+- Only the viewer uses them. `deep-eye show` and `deep-eye export` do not.
+- A long right-to-left line that the viewer wraps can show its lines in the
+  wrong order, because deep-eye changes the order before the viewer wraps the
+  line.
+- Quotes and brackets at the start or the end of a right-to-left run stay
+  where they are. In a line with mixed languages, each run of right-to-left
+  words is reversed on its own. The line itself still goes from left to right.
+
+To try it, run `python examples/arabic_demo.py`, then open the viewer.
 
 ## Trace files
 
@@ -775,6 +810,9 @@ deep-eye does not do these things:
   than the limits. It stores data that is more than 8 levels deep as
   `repr()` text. It also stores objects that it cannot change into JSON as
   `repr()` text. You cannot expand these objects in the viewer.
+- **The viewer does not lay out right-to-left text itself.** The `words` and
+  `full` modes help, but they are an approximation. Refer to
+  [Right-to-left text](#right-to-left-text).
 - **The viewer is for hundreds of runs, not tens of thousands.** It reads
   only the files that changed. It has no pagination and no full-text search.
 - **Traces stay on your computer.** deep-eye can read OpenTelemetry spans,
